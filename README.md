@@ -23,11 +23,11 @@ file_manager.exe
 
 
 # command examples
-> ls -l                    # Detailed listing
-> mkdir projects          # Create directory
-> touch notes.txt         # Create file
-> cat notes.txt           # View file
-> cp notes.txt backup.txt # Copy file
-> find .cpp               # Search for C++ files
-> size Downloads          # Show directory size
-> tree                    # Show directory tree
+## > ls -l                    # Detailed listing
+## > mkdir projects          # Create directory
+## > touch notes.txt         # Create file
+## > cat notes.txt           # View file
+## > cp notes.txt backup.txt # Copy file
+## > find .cpp               # Search for C++ files
+## > size Downloads          # Show directory size
+## > tree                    # Show directory tree
