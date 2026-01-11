@@ -1,0 +1,714 @@
+#include <iostream>
+#include <filesystem>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <iomanip>
+#include <fstream>
+#include <sstream>
+#include <chrono>
+#include <ctime>
+#include <map>
+#include <cstring>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+    #include <windows.h>
+    #define CLEAR "cls"
+#else
+    #include <unistd.h>
+    #include <termios.h>
+    #include <sys/ioctl.h>
+    #define CLEAR "clear"
+#endif
+
+namespace fs = std::filesystem;
+
+// ANSI Color Codes for cross-platform
+#ifdef _WIN32
+    void initColors() {
+        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD consoleMode;
+        GetConsoleMode(hConsole, &consoleMode);
+        SetConsoleMode(hConsole, consoleMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+#else
+    void initColors() {}
+#endif
+
+class FileManager {
+private:
+    fs::path currentPath;
+    std::vector<fs::directory_entry> currentItems;
+    std::vector<std::string> history;
+    size_t historyIndex;
+    std::map<std::string, std::string> fileAssociations;
+    
+    const std::string RESET = "\033[0m";
+    const std::string RED = "\033[31m";
+    const std::string GREEN = "\033[32m";
+    const std::string YELLOW = "\033[33m";
+    const std::string BLUE = "\033[34m";
+    const std::string MAGENTA = "\033[35m";
+    const std::string CYAN = "\033[36m";
+    const std::string WHITE = "\033[37m";
+    const std::string BOLD = "\033[1m";
+    
+public:
+    FileManager() : currentPath(fs::current_path()), historyIndex(0) {
+        initColors();
+        setupFileAssociations();
+        history.push_back(currentPath.string());
+        refreshDirectory();
+    }
+    
+    void setupFileAssociations() {
+        fileAssociations = {
+            {".txt", "Text File"},
+            {".cpp", "C++ Source"},
+            {".h", "Header File"},
+            {".py", "Python Script"},
+            {".java", "Java Source"},
+            {".js", "JavaScript"},
+            {".html", "HTML Document"},
+            {".css", "Stylesheet"},
+            {".pdf", "PDF Document"},
+            {".jpg", "JPEG Image"},
+            {".png", "PNG Image"},
+            {".mp3", "Audio File"},
+            {".mp4", "Video File"},
+            {".zip", "Archive"},
+            {".exe", "Executable"}
+        };
+    }
+    
+    void refreshDirectory() {
+        currentItems.clear();
+        for (const auto& entry : fs::directory_iterator(currentPath)) {
+            currentItems.push_back(entry);
+        }
+        // Sort by name
+        std::sort(currentItems.begin(), currentItems.end(),
+            [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                return a.path().filename().string() < b.path().filename().string();
+            });
+    }
+    
+    void displayDirectory(bool detailed = false) {
+        system(CLEAR);
+        std::cout << BOLD << CYAN << "=== File Manager ===" << RESET << std::endl;
+        std::cout << "Current Directory: " << BOLD << currentPath.string() << RESET << std::endl;
+        std::cout << std::string(60, '-') << std::endl;
+        
+        if (detailed) {
+            std::cout << std::left 
+                      << std::setw(30) << "Name"
+                      << std::setw(12) << "Type"
+                      << std::setw(12) << "Size"
+                      << std::setw(20) << "Last Modified"
+                      << std::endl;
+            std::cout << std::string(74, '-') << std::endl;
+        }
+        
+        // Display parent directory
+        if (currentPath.has_parent_path() && currentPath != currentPath.root_path()) {
+            if (detailed) {
+                std::cout << BLUE << std::left 
+                          << std::setw(30) << "[..] (Parent)"
+                          << std::setw(12) << "DIR"
+                          << std::setw(12) << "-"
+                          << std::setw(20) << "-"
+                          << RESET << std::endl;
+            } else {
+                std::cout << BLUE << "[..]" << RESET << std::endl;
+            }
+        }
+        
+        // Display all items
+        for (const auto& entry : currentItems) {
+            std::string filename = entry.path().filename().string();
+            std::string color = getColorForEntry(entry);
+            
+            if (detailed) {
+                std::string type = entry.is_directory() ? "DIR" : "FILE";
+                std::string size = entry.is_directory() ? "-" : formatSize(entry.file_size());
+                std::string lastModified = formatTime(entry.last_write_time());
+                std::string fileType = getFileType(entry.path().extension().string());
+                
+                std::cout << color << std::left
+                          << std::setw(30) << filename
+                          << std::setw(12) << type
+                          << std::setw(12) << size
+                          << std::setw(20) << lastModified
+                          << " " << fileType
+                          << RESET << std::endl;
+            } else {
+                std::string prefix = entry.is_directory() ? "[DIR] " : "[FILE] ";
+                std::cout << color << prefix << filename << RESET << std::endl;
+            }
+        }
+        
+        std::cout << std::string(60, '-') << std::endl;
+        displayHelp();
+    }
+    
+    std::string getColorForEntry(const fs::directory_entry& entry) {
+        if (entry.is_directory()) return BLUE + BOLD;
+        if (entry.is_symlink()) return CYAN;
+        
+        std::string ext = entry.path().extension().string();
+        if (ext == ".exe" || ext == ".sh" || ext == ".bat") return GREEN;
+        if (ext == ".txt" || ext == ".md") return WHITE;
+        if (ext == ".cpp" || ext == ".h" || ext == ".py" || ext == ".java") return YELLOW;
+        if (ext == ".jpg" || ext == ".png" || ext == ".gif") return MAGENTA;
+        
+        return RESET;
+    }
+    
+    std::string getFileType(const std::string& extension) {
+        auto it = fileAssociations.find(extension);
+        if (it != fileAssociations.end()) {
+            return it->second;
+        }
+        return "Unknown";
+    }
+    
+    std::string formatSize(uintmax_t size) {
+        const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        double sizeDouble = static_cast<double>(size);
+        int unit = 0;
+        
+        while (sizeDouble >= 1024 && unit < 4) {
+            sizeDouble /= 1024;
+            unit++;
+        }
+        
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(2) << sizeDouble << " " << units[unit];
+        return ss.str();
+    }
+    
+    std::string formatTime(fs::file_time_type ftime) {
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+        std::time_t tt = std::chrono::system_clock::to_time_t(sctp);
+        std::tm* tm = std::localtime(&tt);
+        
+        char buffer[20];
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm);
+        return std::string(buffer);
+    }
+    
+    void displayHelp() {
+        std::cout << "\n" << YELLOW << "Commands:" << RESET << std::endl;
+        std::cout << "  cd <dir>      - Change directory" << std::endl;
+        std::cout << "  ls            - List files (simple)" << std::endl;
+        std::cout << "  ls -l         - List files (detailed)" << std::endl;
+        std::cout << "  mkdir <name>  - Create directory" << std::endl;
+        std::cout << "  touch <name>  - Create file" << std::endl;
+        std::cout << "  rm <name>     - Delete file/directory" << std::endl;
+        std::cout << "  cp <src> <dst>- Copy file/directory" << std::endl;
+        std::cout << "  mv <src> <dst>- Move/rename file/directory" << std::endl;
+        std::cout << "  cat <file>    - View file content" << std::endl;
+        std::cout << "  find <name>   - Search for file/directory" << std::endl;
+        std::cout << "  size <path>   - Show size of file/directory" << std::endl;
+        std::cout << "  info <name>   - Show file/directory info" << std::endl;
+        std::cout << "  back          - Go to previous directory" << std::endl;
+        std::cout << "  forward       - Go to next directory" << std::endl;
+        std::cout << "  home          - Go to home directory" << std::endl;
+        std::cout << "  tree          - Display directory tree" << std::endl;
+        std::cout << "  clear/cls     - Clear screen" << std::endl;
+        std::cout << "  help/?        - Show this help" << std::endl;
+        std::cout << "  exit/quit     - Exit program" << std::endl;
+        std::cout << "\n> ";
+    }
+    
+    bool executeCommand(const std::string& input) {
+        std::istringstream iss(input);
+        std::string command;
+        iss >> command;
+        
+        if (command == "cd" || command == "chdir") {
+            std::string dir;
+            iss >> dir;
+            changeDirectory(dir);
+        }
+        else if (command == "ls" || command == "dir") {
+            std::string option;
+            iss >> option;
+            displayDirectory(option == "-l");
+        }
+        else if (command == "mkdir") {
+            std::string dirname;
+            iss >> dirname;
+            createDirectory(dirname);
+        }
+        else if (command == "touch") {
+            std::string filename;
+            iss >> filename;
+            createFile(filename);
+        }
+        else if (command == "rm" || command == "del") {
+            std::string target;
+            iss >> target;
+            deleteFile(target);
+        }
+        else if (command == "cp" || command == "copy") {
+            std::string src, dst;
+            iss >> src >> dst;
+            copyFile(src, dst);
+        }
+        else if (command == "mv" || command == "move" || command == "rename") {
+            std::string src, dst;
+            iss >> src >> dst;
+            moveFile(src, dst);
+        }
+        else if (command == "cat" || command == "type") {
+            std::string filename;
+            iss >> filename;
+            viewFile(filename);
+        }
+        else if (command == "find" || command == "search") {
+            std::string pattern;
+            iss >> pattern;
+            findFile(pattern);
+        }
+        else if (command == "size") {
+            std::string path;
+            iss >> path;
+            showSize(path);
+        }
+        else if (command == "info" || command == "stat") {
+            std::string target;
+            iss >> target;
+            showInfo(target);
+        }
+        else if (command == "back") {
+            goBack();
+        }
+        else if (command == "forward") {
+            goForward();
+        }
+        else if (command == "home") {
+            goHome();
+        }
+        else if (command == "tree") {
+            showTree();
+        }
+        else if (command == "clear" || command == "cls") {
+            system(CLEAR);
+        }
+        else if (command == "help" || command == "?") {
+            displayHelp();
+            std::cout << "\nPress Enter to continue...";
+            std::cin.ignore();
+        }
+        else if (command == "exit" || command == "quit") {
+            return false;
+        }
+        else if (!command.empty()) {
+            std::cout << RED << "Unknown command: " << command << RESET << std::endl;
+        }
+        
+        return true;
+    }
+    
+    void changeDirectory(const std::string& dir) {
+        fs::path newPath;
+        
+        if (dir.empty() || dir == "~") {
+            newPath = getHomeDirectory();
+        }
+        else if (dir == "..") {
+            if (currentPath.has_parent_path()) {
+                newPath = currentPath.parent_path();
+            } else {
+                std::cout << RED << "Already at root directory!" << RESET << std::endl;
+                return;
+            }
+        }
+        else if (dir == "-") {
+            if (historyIndex > 0) {
+                historyIndex--;
+                newPath = fs::path(history[historyIndex]);
+            }
+        }
+        else if (dir == "+") {
+            if (historyIndex < history.size() - 1) {
+                historyIndex++;
+                newPath = fs::path(history[historyIndex]);
+            }
+        }
+        else {
+            newPath = currentPath / dir;
+        }
+        
+        try {
+            if (fs::exists(newPath) && fs::is_directory(newPath)) {
+                currentPath = fs::canonical(newPath);
+                addToHistory(currentPath.string());
+                refreshDirectory();
+                displayDirectory();
+            } else {
+                std::cout << RED << "Directory not found: " << newPath << RESET << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void addToHistory(const std::string& path) {
+        // Remove any future history
+        history.resize(historyIndex + 1);
+        history.push_back(path);
+        historyIndex++;
+    }
+    
+    void createDirectory(const std::string& dirname) {
+        try {
+            fs::path dirPath = currentPath / dirname;
+            if (fs::create_directory(dirPath)) {
+                std::cout << GREEN << "Directory created: " << dirname << RESET << std::endl;
+                refreshDirectory();
+            } else {
+                std::cout << YELLOW << "Directory already exists or could not be created" << RESET << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void createFile(const std::string& filename) {
+        try {
+            fs::path filePath = currentPath / filename;
+            std::ofstream file(filePath);
+            if (file) {
+                std::cout << GREEN << "File created: " << filename << RESET << std::endl;
+                refreshDirectory();
+            } else {
+                std::cout << RED << "Could not create file" << RESET << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void deleteFile(const std::string& target) {
+        try {
+            fs::path targetPath = currentPath / target;
+            
+            if (!fs::exists(targetPath)) {
+                std::cout << RED << "File/directory not found: " << target << RESET << std::endl;
+                return;
+            }
+            
+            std::cout << YELLOW << "Are you sure you want to delete " << target 
+                      << "? (y/n): " << RESET;
+            char confirm;
+            std::cin >> confirm;
+            std::cin.ignore();
+            
+            if (confirm == 'y' || confirm == 'Y') {
+                fs::remove_all(targetPath);
+                std::cout << GREEN << "Deleted: " << target << RESET << std::endl;
+                refreshDirectory();
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void copyFile(const std::string& src, const std::string& dst) {
+        try {
+            fs::path srcPath = currentPath / src;
+            fs::path dstPath = currentPath / dst;
+            
+            if (!fs::exists(srcPath)) {
+                std::cout << RED << "Source not found: " << src << RESET << std::endl;
+                return;
+            }
+            
+            if (fs::is_directory(srcPath)) {
+                fs::copy(srcPath, dstPath, fs::copy_options::recursive);
+            } else {
+                fs::copy(srcPath, dstPath);
+            }
+            
+            std::cout << GREEN << "Copied " << src << " to " << dst << RESET << std::endl;
+            refreshDirectory();
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void moveFile(const std::string& src, const std::string& dst) {
+        try {
+            fs::path srcPath = currentPath / src;
+            fs::path dstPath = currentPath / dst;
+            
+            if (!fs::exists(srcPath)) {
+                std::cout << RED << "Source not found: " << src << RESET << std::endl;
+                return;
+            }
+            
+            fs::rename(srcPath, dstPath);
+            std::cout << GREEN << "Moved " << src << " to " << dst << RESET << std::endl;
+            refreshDirectory();
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void viewFile(const std::string& filename) {
+        try {
+            fs::path filePath = currentPath / filename;
+            
+            if (!fs::exists(filePath)) {
+                std::cout << RED << "File not found: " << filename << RESET << std::endl;
+                return;
+            }
+            
+            if (fs::is_directory(filePath)) {
+                std::cout << RED << filename << " is a directory, not a file" << RESET << std::endl;
+                return;
+            }
+            
+            std::ifstream file(filePath);
+            if (file) {
+                std::cout << CYAN << "\n=== Content of " << filename << " ===\n" << RESET << std::endl;
+                std::string line;
+                int lineCount = 0;
+                while (std::getline(file, line) && lineCount < 100) {
+                    std::cout << line << std::endl;
+                    lineCount++;
+                }
+                if (lineCount >= 100) {
+                    std::cout << YELLOW << "\n... (truncated to 100 lines)" << RESET << std::endl;
+                }
+                std::cout << CYAN << "\n=== End of file ===\n" << RESET << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void findFile(const std::string& pattern) {
+        try {
+            std::cout << CYAN << "\nSearching for: " << pattern << "\n" << RESET << std::endl;
+            int found = 0;
+            
+            for (const auto& entry : fs::recursive_directory_iterator(currentPath)) {
+                std::string filename = entry.path().filename().string();
+                if (filename.find(pattern) != std::string::npos) {
+                    std::string type = entry.is_directory() ? "DIR" : "FILE";
+                    std::string path = fs::relative(entry.path(), currentPath).string();
+                    
+                    std::cout << (entry.is_directory() ? BLUE : WHITE)
+                              << std::setw(6) << type << " "
+                              << path << RESET << std::endl;
+                    found++;
+                    
+                    if (found >= 50) {
+                        std::cout << YELLOW << "... (limited to 50 results)" << RESET << std::endl;
+                        break;
+                    }
+                }
+            }
+            
+            std::cout << GREEN << "\nFound " << found << " items" << RESET << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void showSize(const std::string& target) {
+        try {
+            fs::path targetPath = currentPath / target;
+            
+            if (!fs::exists(targetPath)) {
+                std::cout << RED << "Path not found: " << target << RESET << std::endl;
+                return;
+            }
+            
+            uintmax_t totalSize = 0;
+            if (fs::is_directory(targetPath)) {
+                for (const auto& entry : fs::recursive_directory_iterator(targetPath)) {
+                    if (!entry.is_directory()) {
+                        totalSize += entry.file_size();
+                    }
+                }
+            } else {
+                totalSize = fs::file_size(targetPath);
+            }
+            
+            std::cout << CYAN << "Size of " << target << ": " 
+                      << formatSize(totalSize) << " (" << totalSize << " bytes)" 
+                      << RESET << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    void showInfo(const std::string& target) {
+        try {
+            fs::path targetPath = currentPath / target;
+            
+            if (!fs::exists(targetPath)) {
+                std::cout << RED << "Path not found: " << target << RESET << std::endl;
+                return;
+            }
+            
+            std::cout << CYAN << "\n=== Information for " << target << " ===" << RESET << std::endl;
+            std::cout << "Full Path: " << fs::absolute(targetPath) << std::endl;
+            std::cout << "Type: " << (fs::is_directory(targetPath) ? "Directory" : "File") << std::endl;
+            
+            if (fs::is_regular_file(targetPath)) {
+                std::cout << "Size: " << formatSize(fs::file_size(targetPath)) << std::endl;
+                std::cout << "Extension: " << targetPath.extension() << std::endl;
+            }
+            
+            std::cout << "Last Modified: " << formatTime(fs::last_write_time(targetPath)) << std::endl;
+            std::cout << "Permissions: " << getPermissions(targetPath) << std::endl;
+            
+            if (fs::is_directory(targetPath)) {
+                int fileCount = 0;
+                int dirCount = 0;
+                for (const auto& entry : fs::directory_iterator(targetPath)) {
+                    if (entry.is_directory()) dirCount++;
+                    else fileCount++;
+                }
+                std::cout << "Contents: " << fileCount << " files, " << dirCount << " directories" << RESET << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << RED << "Error: " << e.what() << RESET << std::endl;
+        }
+    }
+    
+    std::string getPermissions(const fs::path& path) {
+        std::string perms;
+        fs::perms p = fs::status(path).permissions();
+        
+        perms += (p & fs::perms::owner_read) != fs::perms::none ? "r" : "-";
+        perms += (p & fs::perms::owner_write) != fs::perms::none ? "w" : "-";
+        perms += (p & fs::perms::owner_exec) != fs::perms::none ? "x" : "-";
+        perms += (p & fs::perms::group_read) != fs::perms::none ? "r" : "-";
+        perms += (p & fs::perms::group_write) != fs::perms::none ? "w" : "-";
+        perms += (p & fs::perms::group_exec) != fs::perms::none ? "x" : "-";
+        perms += (p & fs::perms::others_read) != fs::perms::none ? "r" : "-";
+        perms += (p & fs::perms::others_write) != fs::perms::none ? "w" : "-";
+        perms += (p & fs::perms::others_exec) != fs::perms::none ? "x" : "-";
+        
+        return perms;
+    }
+    
+    void goBack() {
+        if (historyIndex > 0) {
+            historyIndex--;
+            currentPath = fs::path(history[historyIndex]);
+            refreshDirectory();
+            displayDirectory();
+        } else {
+            std::cout << YELLOW << "No history to go back to" << RESET << std::endl;
+        }
+    }
+    
+    void goForward() {
+        if (historyIndex < history.size() - 1) {
+            historyIndex++;
+            currentPath = fs::path(history[historyIndex]);
+            refreshDirectory();
+            displayDirectory();
+        } else {
+            std::cout << YELLOW << "No forward history" << RESET << std::endl;
+        }
+    }
+    
+    void goHome() {
+        currentPath = getHomeDirectory();
+        addToHistory(currentPath.string());
+        refreshDirectory();
+        displayDirectory();
+    }
+    
+    void showTree(int depth = 3) {
+        std::cout << CYAN << "\nDirectory Tree (max depth: " << depth << "):\n" << RESET << std::endl;
+        printTree(currentPath, 0, depth);
+    }
+    
+    void printTree(const fs::path& path, int level, int maxDepth, const std::string& prefix = "") {
+        if (level > maxDepth) return;
+        
+        try {
+            int count = 0;
+            std::vector<fs::directory_entry> items;
+            for (const auto& entry : fs::directory_iterator(path)) {
+                items.push_back(entry);
+            }
+            std::sort(items.begin(), items.end(),
+                [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                    return a.path().filename().string() < b.path().filename().string();
+                });
+            
+            for (size_t i = 0; i < items.size(); ++i) {
+                const auto& entry = items[i];
+                bool isLast = (i == items.size() - 1);
+                
+                std::string currentPrefix = prefix + (isLast ? "└── " : "├── ");
+                std::string childPrefix = prefix + (isLast ? "    " : "│   ");
+                
+                std::string color = getColorForEntry(entry);
+                std::string name = entry.path().filename().string();
+                
+                std::cout << currentPrefix << color << name << RESET << std::endl;
+                
+                if (entry.is_directory() && level < maxDepth) {
+                    printTree(entry.path(), level + 1, maxDepth, childPrefix);
+                }
+            }
+        } catch (const std::exception&) {
+            // Skip directories we can't access
+        }
+    }
+    
+    fs::path getHomeDirectory() {
+        #ifdef _WIN32
+            const char* home = std::getenv("USERPROFILE");
+            if (home) return fs::path(home);
+            return fs::path("C:\\");
+        #else
+            const char* home = std::getenv("HOME");
+            if (home) return fs::path(home);
+            return fs::current_path();
+        #endif
+    }
+    
+    void run() {
+        std::string input;
+        displayDirectory();
+        
+        while (true) {
+            std::cout << "\n> ";
+            std::getline(std::cin, input);
+            
+            if (input.empty()) {
+                displayDirectory();
+                continue;
+            }
+            
+            if (!executeCommand(input)) {
+                std::cout << GREEN << "Goodbye!" << RESET << std::endl;
+                break;
+            }
+        }
+    }
+};
+
+int main() {
+    std::cout << GREEN << "Starting C++ File Manager..." << RESET << std::endl;
+    std::cout << "Type 'help' for available commands\n" << std::endl;
+    
+    FileManager fm;
+    fm.run();
+    
+    return 0;
+}
